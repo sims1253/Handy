@@ -38,7 +38,9 @@ pub struct TranscriptionCoordinator {
 }
 
 pub fn is_transcribe_binding(id: &str) -> bool {
-    id == "transcribe" || id == "transcribe_with_post_process"
+    id == "transcribe"
+        || id == "transcribe_with_post_process"
+        || id.starts_with("post_process_prompt:")
 }
 
 impl TranscriptionCoordinator {
@@ -159,8 +161,15 @@ impl TranscriptionCoordinator {
 }
 
 fn start(app: &AppHandle, stage: &mut Stage, binding_id: &str, hotkey_string: &str) {
-    let Some(action) = ACTION_MAP.get(binding_id) else {
-        warn!("No action in ACTION_MAP for '{binding_id}'");
+    // For prompt-specific bindings, fall through to the post-process action
+    let resolved_id = if binding_id.starts_with("post_process_prompt:") {
+        "transcribe_with_post_process"
+    } else {
+        binding_id
+    };
+
+    let Some(action) = ACTION_MAP.get(resolved_id) else {
+        warn!("No action in ACTION_MAP for '{binding_id}' (resolved: '{resolved_id}')");
         return;
     };
     action.start(app, binding_id, hotkey_string);
@@ -175,8 +184,15 @@ fn start(app: &AppHandle, stage: &mut Stage, binding_id: &str, hotkey_string: &s
 }
 
 fn stop(app: &AppHandle, stage: &mut Stage, binding_id: &str, hotkey_string: &str) {
-    let Some(action) = ACTION_MAP.get(binding_id) else {
-        warn!("No action in ACTION_MAP for '{binding_id}'");
+    // For prompt-specific bindings, fall through to the post-process action
+    let resolved_id = if binding_id.starts_with("post_process_prompt:") {
+        "transcribe_with_post_process"
+    } else {
+        binding_id
+    };
+
+    let Some(action) = ACTION_MAP.get(resolved_id) else {
+        warn!("No action in ACTION_MAP for '{binding_id}' (resolved: '{resolved_id}')");
         return;
     };
     action.stop(app, binding_id, hotkey_string);

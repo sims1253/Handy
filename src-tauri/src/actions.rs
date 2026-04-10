@@ -5,7 +5,7 @@ use crate::audio_toolkit::{is_microphone_access_denied, is_no_input_device_error
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::history::HistoryManager;
 use crate::managers::transcription::TranscriptionManager;
-use crate::settings::{get_settings, AppSettings, APPLE_INTELLIGENCE_PROVIDER_ID};
+use crate::settings::{get_settings, AppSettings, ContextSource, APPLE_INTELLIGENCE_PROVIDER_ID};
 use crate::shortcut;
 use crate::tray::{change_tray_icon, TrayIconState};
 use crate::utils::{
@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tauri::Manager;
 use tauri::{AppHandle, Emitter};
+use tauri_plugin_clipboard_manager::ClipboardExt;
 
 #[derive(Clone, serde::Serialize)]
 struct RecordingErrorEvent {
@@ -47,6 +48,7 @@ pub trait ShortcutAction: Send + Sync {
 // Transcribe Action
 struct TranscribeAction {
     post_process: bool,
+    prompt_id: Option<String>,
 }
 
 /// Field name for structured output JSON schema
@@ -59,47 +61,101 @@ fn strip_invisible_chars(s: &str) -> String {
 
 /// Build a system prompt from the user's prompt template.
 /// Removes `${output}` placeholder since the transcription is sent as the user message.
-fn build_system_prompt(prompt_template: &str) -> String {
-    prompt_template.replace("${output}", "").trim().to_string()
+/// Replaces `${context}` with the provided context or an empty string.
+fn build_system_prompt(prompt_template: &str, context: Option<&str>) -> String {
+    let result = prompt_template
+        .replace("${output}", "")
+        .replace("${context}", context.unwrap_or(""));
+    result.trim().to_string()
 }
 
-async fn post_process_transcription(settings: &AppSettings, transcription: &str) -> Option<String> {
-    let provider = match settings.active_post_process_provider().cloned() {
-        Some(provider) => provider,
-        None => {
-            debug!("Post-processing enabled but no provider is selected");
-            return None;
+/// Retrieve context from the configured source (clipboard or selection).
+/// For Selection mode, simulates Ctrl/Cmd+C then reads clipboard.
+async fn get_context(app: &AppHandle, source: ContextSource) -> Option<String> {
+    match source {
+        ContextSource::None => None,
+        ContextSource::Clipboard | ContextSource::Selection => {
+            if source == ContextSource::Selection {
+                // Simulate Cmd/Ctrl+C to copy the current selection to clipboard
+                simulate_copy();
+                // Brief delay to allow clipboard to update
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            }
+            let clipboard = app.clipboard();
+            match clipboard.read_text() {
+                Ok(text) if !text.trim().is_empty() => {
+                    debug!(
+                        "Context retrieved from {}: {} chars",
+                        match source {
+                            ContextSource::Clipboard => "clipboard",
+                            ContextSource::Selection => "selection",
+                            ContextSource::None => "none",
+                        },
+                        text.len()
+                    );
+                    Some(text)
+                }
+                Ok(_) => {
+                    debug!("Context source {:?} returned empty content", source);
+                    None
+                }
+                Err(e) => {
+                    warn!("Failed to read clipboard for context: {}", e);
+                    None
+                }
+            }
         }
-    };
-
-    let model = settings
-        .post_process_models
-        .get(&provider.id)
-        .cloned()
-        .unwrap_or_default();
-
-    if model.trim().is_empty() {
-        debug!(
-            "Post-processing skipped because provider '{}' has no model configured",
-            provider.id
-        );
-        return None;
     }
+}
 
-    let selected_prompt_id = match &settings.post_process_selected_prompt_id {
-        Some(id) => id.clone(),
-        None => {
-            debug!("Post-processing skipped because no prompt is selected");
-            return None;
-        }
+/// Simulate a copy operation (Ctrl/Cmd+C) to capture the current selection.
+fn simulate_copy() {
+    std::thread::spawn(|| {
+        use enigo::{Direction, Enigo, Key, Keyboard};
+        let mut enigo = match Enigo::new(&Default::default()) {
+            Ok(e) => e,
+            Err(e) => {
+                warn!("Failed to create Enigo for copy simulation: {}", e);
+                return;
+            }
+        };
+
+        #[cfg(target_os = "macos")]
+        let (modifier, v_key) = (Key::Meta, Key::Other(8)); // VK_C on macOS
+        #[cfg(target_os = "windows")]
+        let (modifier, v_key) = (Key::Control, Key::Other(0x43)); // VK_C
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        let (modifier, v_key) = (Key::Control, Key::Unicode('c'));
+
+        let _ = enigo.key(modifier, Direction::Press);
+        let _ = enigo.key(v_key, Direction::Click);
+        let _ = enigo.key(modifier, Direction::Release);
+    });
+}
+
+async fn post_process_transcription(
+    settings: &AppSettings,
+    transcription: &str,
+    prompt_id_override: Option<&str>,
+    context: Option<&str>,
+) -> Option<String> {
+    let selected_prompt_id = match prompt_id_override {
+        Some(id) => id.to_string(),
+        None => match &settings.post_process_selected_prompt_id {
+            Some(id) => id.clone(),
+            None => {
+                debug!("Post-processing skipped because no prompt is selected");
+                return None;
+            }
+        },
     };
 
-    let prompt = match settings
+    let llm_prompt = match settings
         .post_process_prompts
         .iter()
         .find(|prompt| prompt.id == selected_prompt_id)
     {
-        Some(prompt) => prompt.prompt.clone(),
+        Some(prompt) => prompt,
         None => {
             debug!(
                 "Post-processing skipped because prompt '{}' was not found",
@@ -109,10 +165,42 @@ async fn post_process_transcription(settings: &AppSettings, transcription: &str)
         }
     };
 
+    let prompt = llm_prompt.prompt.clone();
+
     if prompt.trim().is_empty() {
         debug!("Post-processing skipped because the selected prompt is empty");
         return None;
     }
+
+    // Resolve provider: per-prompt override takes precedence, then global setting
+    let resolved_provider_id = llm_prompt
+        .provider_id
+        .as_deref()
+        .unwrap_or(&settings.post_process_provider_id);
+
+    let provider = match settings.post_process_provider(resolved_provider_id) {
+        Some(provider) => provider.clone(),
+        None => {
+            debug!(
+                "Post-processing enabled but provider '{}' not found",
+                resolved_provider_id
+            );
+            return None;
+        }
+    };
+
+    // Resolve model: per-prompt override takes precedence, then global setting for the provider
+    let model = llm_prompt
+        .model
+        .as_deref()
+        .map(|m| m.to_string())
+        .unwrap_or_else(|| {
+            settings
+                .post_process_models
+                .get(&provider.id)
+                .cloned()
+                .unwrap_or_default()
+        });
 
     debug!(
         "Starting LLM post-processing with provider '{}' (model: {})",
@@ -144,7 +232,7 @@ async fn post_process_transcription(settings: &AppSettings, transcription: &str)
     if provider.supports_structured_output {
         debug!("Using structured outputs for provider '{}'", provider.id);
 
-        let system_prompt = build_system_prompt(&prompt);
+        let system_prompt = build_system_prompt(&prompt, context);
         let user_content = transcription.to_string();
 
         // Handle Apple Intelligence separately since it uses native Swift APIs
@@ -258,8 +346,10 @@ async fn post_process_transcription(settings: &AppSettings, transcription: &str)
         }
     }
 
-    // Legacy mode: Replace ${output} variable in the prompt with the actual text
-    let processed_prompt = prompt.replace("${output}", transcription);
+    // Legacy mode: Replace ${output} and ${context} variables in the prompt
+    let processed_prompt = prompt
+        .replace("${output}", transcription)
+        .replace("${context}", context.unwrap_or(""));
     debug!("Processed prompt length: {} chars", processed_prompt.len());
 
     match crate::llm_client::send_chat_completion(
@@ -350,6 +440,8 @@ pub(crate) async fn process_transcription_output(
     app: &AppHandle,
     transcription: &str,
     post_process: bool,
+    prompt_id_override: Option<&str>,
+    context: Option<&str>,
 ) -> ProcessedTranscription {
     let settings = get_settings(app);
     let mut final_text = transcription.to_string();
@@ -361,15 +453,20 @@ pub(crate) async fn process_transcription_output(
     }
 
     if post_process {
-        if let Some(processed_text) = post_process_transcription(&settings, &final_text).await {
+        if let Some(processed_text) =
+            post_process_transcription(&settings, &final_text, prompt_id_override, context).await
+        {
             post_processed_text = Some(processed_text.clone());
             final_text = processed_text;
 
-            if let Some(prompt_id) = &settings.post_process_selected_prompt_id {
+            let effective_prompt_id = prompt_id_override
+                .map(|s| s.to_string())
+                .or(settings.post_process_selected_prompt_id.clone());
+            if let Some(prompt_id) = effective_prompt_id {
                 if let Some(prompt) = settings
                     .post_process_prompts
                     .iter()
-                    .find(|prompt| &prompt.id == prompt_id)
+                    .find(|prompt| prompt.id == prompt_id)
                 {
                     post_process_prompt = Some(prompt.prompt.clone());
                 }
@@ -512,6 +609,12 @@ impl ShortcutAction for TranscribeAction {
 
         let binding_id = binding_id.to_string(); // Clone binding_id for the async task
         let post_process = self.post_process;
+        // Resolve prompt_id: explicit override takes precedence, then extract from binding_id
+        let prompt_id_override = self.prompt_id.clone().or_else(|| {
+            binding_id
+                .strip_prefix("post_process_prompt:")
+                .map(|s| s.to_string())
+        });
 
         tauri::async_runtime::spawn(async move {
             let _guard = FinishGuard(ah.clone());
@@ -582,9 +685,36 @@ impl ShortcutAction for TranscribeAction {
                             if post_process {
                                 show_processing_overlay(&ah);
                             }
-                            let processed =
-                                process_transcription_output(&ah, &transcription, post_process)
-                                    .await;
+
+                            // Resolve context for prompt-specific actions
+                            let context = if post_process {
+                                let settings = get_settings(&ah);
+                                let effective_prompt_id = prompt_id_override
+                                    .as_deref()
+                                    .or(settings.post_process_selected_prompt_id.as_deref());
+                                if let Some(pid) = effective_prompt_id {
+                                    if let Some(prompt) =
+                                        settings.post_process_prompts.iter().find(|p| p.id == pid)
+                                    {
+                                        get_context(&ah, prompt.context_source).await
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+
+                            let processed = process_transcription_output(
+                                &ah,
+                                &transcription,
+                                post_process,
+                                prompt_id_override.as_deref(),
+                                context.as_deref(),
+                            )
+                            .await;
 
                             // Save to history if WAV was saved
                             if wav_saved {
@@ -703,11 +833,15 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
         "transcribe".to_string(),
         Arc::new(TranscribeAction {
             post_process: false,
+            prompt_id: None,
         }) as Arc<dyn ShortcutAction>,
     );
     map.insert(
         "transcribe_with_post_process".to_string(),
-        Arc::new(TranscribeAction { post_process: true }) as Arc<dyn ShortcutAction>,
+        Arc::new(TranscribeAction {
+            post_process: true,
+            prompt_id: None,
+        }) as Arc<dyn ShortcutAction>,
     );
     map.insert(
         "cancel".to_string(),

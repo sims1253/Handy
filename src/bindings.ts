@@ -232,17 +232,17 @@ async fetchPostProcessModels(providerId: string) : Promise<Result<string[], stri
     else return { status: "error", error: e  as any };
 }
 },
-async addPostProcessPrompt(name: string, prompt: string) : Promise<Result<LLMPrompt, string>> {
+async addPostProcessPrompt(name: string, prompt: string, contextSource: ContextSource, shortcutBinding: string | null, providerId: string | null, model: string | null) : Promise<Result<LLMPrompt, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("add_post_process_prompt", { name, prompt }) };
+    return { status: "ok", data: await TAURI_INVOKE("add_post_process_prompt", { name, prompt, contextSource, shortcutBinding, providerId, model }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
 },
-async updatePostProcessPrompt(id: string, name: string, prompt: string) : Promise<Result<null, string>> {
+async updatePostProcessPrompt(id: string, name: string, prompt: string, contextSource: ContextSource, shortcutBinding: string | null, providerId: string | null, model: string | null) : Promise<Result<null, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("update_post_process_prompt", { id, name, prompt }) };
+    return { status: "ok", data: await TAURI_INVOKE("update_post_process_prompt", { id, name, prompt, contextSource, shortcutBinding, providerId, model }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -846,8 +846,9 @@ export type ImplementationChangeResult = { success: boolean;
  * List of binding IDs that were reset to defaults due to incompatibility
  */
 reset_bindings: string[] }
+export type ContextSource = "none" | "clipboard" | "selection"
 export type KeyboardImplementation = "tauri" | "handy_keys"
-export type LLMPrompt = { id: string; name: string; prompt: string }
+export type LLMPrompt = { id: string; name: string; prompt: string; context_source: ContextSource; shortcut_binding: string | null; provider_id: string | null; model: string | null }
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error"
 export type ModelInfo = { id: string; name: string; description: string; filename: string; url: string | null; sha256: string | null; size_mb: number; is_downloaded: boolean; is_downloading: boolean; partial_size: number; is_directory: boolean; engine_type: EngineType; accuracy_score: number; speed_score: number; supports_translation: boolean; is_recommended: boolean; supported_languages: string[]; supports_language_selection: boolean; is_custom: boolean }
 export type ModelLoadStatus = { is_loaded: boolean; current_model: string | null }

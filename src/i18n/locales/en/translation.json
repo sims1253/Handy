@@ -410,6 +410,29 @@
         "promptInstructions": "Prompt Instructions",
         "promptInstructionsPlaceholder": "Write the instructions to run after transcription. Example: Improve grammar and clarity for the following text: ${output}",
         "promptTip": "Tip: Use <code>${output}</code> to insert the transcribed text in your prompt.",
+        "promptTipWithVariable": "Tip: Use <code>${output}</code> for transcribed text and <code>${context}</code> to insert context from clipboard or selection.",
+        "contextSource": {
+          "title": "Context Source",
+          "description": "Choose additional text to include with the prompt. This text is available as ${context} in your prompt template.",
+          "none": "None (transcription only)",
+          "clipboard": "Clipboard contents",
+          "selection": "Selected text (copies selection first)"
+        },
+        "shortcut": {
+          "title": "Prompt Shortcut",
+          "description": "Assign a keyboard shortcut to trigger transcription with this specific prompt.",
+          "placeholder": "e.g. ctrl+alt+1",
+          "clear": "Clear"
+        },
+        "providerOverride": {
+          "title": "Provider Override",
+          "description": "Override the global LLM provider for this prompt. Defaults to the global provider if not set.",
+          "global": "Use global setting"
+        },
+        "modelOverride": {
+          "title": "Model Override",
+          "description": "Override the model for this prompt. Defaults to the global model if not set."
+        },
         "updatePrompt": "Update Prompt",
         "deletePrompt": "Delete Prompt",
         "createPrompt": "Create Prompt",

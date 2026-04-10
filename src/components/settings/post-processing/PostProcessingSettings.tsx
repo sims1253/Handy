@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { RefreshCcw } from "lucide-react";
 import { commands } from "@/bindings";
@@ -143,18 +143,86 @@ const PostProcessingSettingsApiComponent: React.FC = () => {
   );
 };
 
+const CONTEXT_SOURCE_OPTIONS = [
+  { value: "none", label: "settings.postProcessing.prompts.contextSource.none" },
+  { value: "clipboard", label: "settings.postProcessing.prompts.contextSource.clipboard" },
+  { value: "selection", label: "settings.postProcessing.prompts.contextSource.selection" },
+] as const;
+
+import type { ContextSource } from "@/bindings";
+
 const PostProcessingSettingsPromptsComponent: React.FC = () => {
   const { t } = useTranslation();
-  const { getSetting, updateSetting, isUpdating, refreshSettings } =
-    useSettings();
+  const {
+    getSetting,
+    updateSetting,
+    isUpdating,
+    refreshSettings,
+    settings,
+    fetchPostProcessModels,
+    postProcessModelOptions,
+  } = useSettings();
   const [isCreating, setIsCreating] = useState(false);
   const [draftName, setDraftName] = useState("");
   const [draftText, setDraftText] = useState("");
+  const [draftContextSource, setDraftContextSource] =
+    useState<ContextSource>("none");
+  const [draftShortcut, setDraftShortcut] = useState<string | null>(null);
+  const [draftProviderId, setDraftProviderId] = useState<string | null>(null);
+  const [draftModel, setDraftModel] = useState<string | null>(null);
 
   const prompts = getSetting("post_process_prompts") || [];
   const selectedPromptId = getSetting("post_process_selected_prompt_id") || "";
   const selectedPrompt =
     prompts.find((prompt) => prompt.id === selectedPromptId) || null;
+
+  // Providers available for per-prompt override
+  const providers = useMemo(
+    () => settings?.post_process_providers || [],
+    [settings?.post_process_providers],
+  );
+  const providerOptions = useMemo(
+    () => [
+      {
+        value: "",
+        label: t("settings.postProcessing.prompts.providerOverride.global"),
+      },
+      ...providers.map((p) => ({ value: p.id, label: p.label })),
+    ],
+    [providers, t],
+  );
+
+  // Resolve the effective provider ID for model fetching
+  const effectiveProviderId = draftProviderId || "";
+
+  // Per-prompt model options (fetched on demand)
+  const perPromptModels = useMemo(
+    () => postProcessModelOptions[effectiveProviderId] || [],
+    [postProcessModelOptions, effectiveProviderId],
+  );
+
+  const isFetchingModels = isUpdating(
+    `post_process_models_fetch:${effectiveProviderId}`,
+  );
+
+  const handleRefreshPerPromptModels = useCallback(() => {
+    if (!effectiveProviderId) return;
+    void fetchPostProcessModels(effectiveProviderId);
+  }, [effectiveProviderId, fetchPostProcessModels]);
+
+  const modelOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const options: { value: string; label: string }[] = [];
+    const upsert = (v: string | null | undefined) => {
+      const trimmed = v?.trim();
+      if (!trimmed || seen.has(trimmed)) return;
+      seen.add(trimmed);
+      options.push({ value: trimmed, label: trimmed });
+    };
+    for (const m of perPromptModels) upsert(m);
+    upsert(draftModel);
+    return options;
+  }, [perPromptModels, draftModel]);
 
   useEffect(() => {
     if (isCreating) return;
@@ -162,15 +230,27 @@ const PostProcessingSettingsPromptsComponent: React.FC = () => {
     if (selectedPrompt) {
       setDraftName(selectedPrompt.name);
       setDraftText(selectedPrompt.prompt);
+      setDraftContextSource(selectedPrompt.context_source || "none");
+      setDraftShortcut(selectedPrompt.shortcut_binding ?? null);
+      setDraftProviderId(selectedPrompt.provider_id ?? null);
+      setDraftModel(selectedPrompt.model ?? null);
     } else {
       setDraftName("");
       setDraftText("");
+      setDraftContextSource("none");
+      setDraftShortcut(null);
+      setDraftProviderId(null);
+      setDraftModel(null);
     }
   }, [
     isCreating,
     selectedPromptId,
     selectedPrompt?.name,
     selectedPrompt?.prompt,
+    selectedPrompt?.context_source,
+    selectedPrompt?.shortcut_binding,
+    selectedPrompt?.provider_id,
+    selectedPrompt?.model,
   ]);
 
   const handlePromptSelect = (promptId: string | null) => {
@@ -186,6 +266,10 @@ const PostProcessingSettingsPromptsComponent: React.FC = () => {
       const result = await commands.addPostProcessPrompt(
         draftName.trim(),
         draftText.trim(),
+        draftContextSource,
+        draftShortcut,
+        draftProviderId,
+        draftModel,
       );
       if (result.status === "ok") {
         await refreshSettings();
@@ -205,6 +289,10 @@ const PostProcessingSettingsPromptsComponent: React.FC = () => {
         selectedPromptId,
         draftName.trim(),
         draftText.trim(),
+        draftContextSource,
+        draftShortcut,
+        draftProviderId,
+        draftModel,
       );
       await refreshSettings();
     } catch (error) {
@@ -229,9 +317,17 @@ const PostProcessingSettingsPromptsComponent: React.FC = () => {
     if (selectedPrompt) {
       setDraftName(selectedPrompt.name);
       setDraftText(selectedPrompt.prompt);
+      setDraftContextSource(selectedPrompt.context_source || "none");
+      setDraftShortcut(selectedPrompt.shortcut_binding ?? null);
+      setDraftProviderId(selectedPrompt.provider_id ?? null);
+      setDraftModel(selectedPrompt.model ?? null);
     } else {
       setDraftName("");
       setDraftText("");
+      setDraftContextSource("none");
+      setDraftShortcut(null);
+      setDraftProviderId(null);
+      setDraftModel(null);
     }
   };
 
@@ -239,13 +335,180 @@ const PostProcessingSettingsPromptsComponent: React.FC = () => {
     setIsCreating(true);
     setDraftName("");
     setDraftText("");
+    setDraftContextSource("none");
+    setDraftShortcut(null);
+    setDraftProviderId(null);
+    setDraftModel(null);
   };
 
   const hasPrompts = prompts.length > 0;
   const isDirty =
     !!selectedPrompt &&
     (draftName.trim() !== selectedPrompt.name ||
-      draftText.trim() !== selectedPrompt.prompt.trim());
+      draftText.trim() !== selectedPrompt.prompt.trim() ||
+      draftContextSource !== (selectedPrompt.context_source || "none") ||
+      draftShortcut !== (selectedPrompt.shortcut_binding ?? null) ||
+      draftProviderId !== (selectedPrompt.provider_id ?? null) ||
+      draftModel !== (selectedPrompt.model ?? null));
+
+  const promptEditorFields = (
+    <>
+      <div className="space-y-2 flex flex-col">
+        <label className="text-sm font-semibold">
+          {t("settings.postProcessing.prompts.promptLabel")}
+        </label>
+        <Input
+          type="text"
+          value={draftName}
+          onChange={(e) => setDraftName(e.target.value)}
+          placeholder={t(
+            "settings.postProcessing.prompts.promptLabelPlaceholder",
+          )}
+          variant="compact"
+        />
+      </div>
+
+      <div className="space-y-2 flex flex-col">
+        <label className="text-sm font-semibold">
+          {t("settings.postProcessing.prompts.promptInstructions")}
+        </label>
+        <Textarea
+          value={draftText}
+          onChange={(e) => setDraftText(e.target.value)}
+          placeholder={t(
+            "settings.postProcessing.prompts.promptInstructionsPlaceholder",
+          )}
+        />
+        <p className="text-xs text-mid-gray/70">
+          <Trans
+            i18nKey="settings.postProcessing.prompts.promptTipWithVariable"
+            components={{ code: <code /> }}
+          />
+        </p>
+      </div>
+
+      <div className="space-y-2 flex flex-col">
+        <label className="text-sm font-semibold">
+          {t("settings.postProcessing.prompts.contextSource.title")}
+        </label>
+        <p className="text-xs text-mid-gray/70">
+          {t("settings.postProcessing.prompts.contextSource.description")}
+        </p>
+        <Dropdown
+          selectedValue={draftContextSource}
+          options={CONTEXT_SOURCE_OPTIONS.map((opt) => ({
+            value: opt.value,
+            label: t(opt.label),
+          }))}
+          onSelect={(value: string | null) =>
+            setDraftContextSource((value as ContextSource) || "none")
+          }
+          placeholder={t(
+            "settings.postProcessing.prompts.contextSource.none",
+          )}
+          className="max-w-[280px]"
+        />
+      </div>
+
+      <div className="space-y-2 flex flex-col">
+        <label className="text-sm font-semibold">
+          {t("settings.postProcessing.prompts.shortcut.title")}
+        </label>
+        <p className="text-xs text-mid-gray/70">
+          {t("settings.postProcessing.prompts.shortcut.description")}
+        </p>
+        <div className="flex items-center gap-2 max-w-[280px]">
+          <Input
+            type="text"
+            value={draftShortcut ?? ""}
+            onChange={(e) =>
+              setDraftShortcut(e.target.value.trim() || null)
+            }
+            placeholder={t(
+              "settings.postProcessing.prompts.shortcut.placeholder",
+            )}
+            variant="compact"
+          />
+          {draftShortcut && (
+            <Button
+              onClick={() => setDraftShortcut(null)}
+              variant="secondary"
+              size="sm"
+            >
+              {t("settings.postProcessing.prompts.shortcut.clear")}
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <div className="space-y-2 flex flex-col">
+        <label className="text-sm font-semibold">
+          {t("settings.postProcessing.prompts.providerOverride.title")}
+        </label>
+        <p className="text-xs text-mid-gray/70">
+          {t("settings.postProcessing.prompts.providerOverride.description")}
+        </p>
+        <div className="flex items-center gap-2 max-w-[380px]">
+          <Dropdown
+            options={providerOptions}
+            selectedValue={draftProviderId || ""}
+            onSelect={(value: string | null) => {
+              const resolved = value || null;
+              setDraftProviderId(resolved);
+              // Clear model when provider changes
+              setDraftModel(null);
+            }}
+            placeholder={t(
+              "settings.postProcessing.prompts.providerOverride.global",
+            )}
+            className="flex-1"
+          />
+        </div>
+      </div>
+
+      {draftProviderId && (
+        <div className="space-y-2 flex flex-col">
+          <label className="text-sm font-semibold">
+            {t("settings.postProcessing.prompts.modelOverride.title")}
+          </label>
+          <p className="text-xs text-mid-gray/70">
+            {t("settings.postProcessing.prompts.modelOverride.description")}
+          </p>
+          <div className="flex items-center gap-2">
+            <ModelSelect
+              value={draftModel || ""}
+              options={modelOptions}
+              disabled={isUpdating(
+                `post_process_model_override:${effectiveProviderId}`,
+              )}
+              isLoading={isFetchingModels}
+              placeholder={
+                modelOptions.length > 0
+                  ? t(
+                      "settings.postProcessing.api.model.placeholderWithOptions",
+                    )
+                  : t("settings.postProcessing.api.model.placeholderNoOptions")
+              }
+              onSelect={(value: string) => setDraftModel(value || null)}
+              onCreate={(value: string) => setDraftModel(value || null)}
+              onBlur={() => {}}
+              className="flex-1 min-w-[380px]"
+            />
+            <ResetButton
+              onClick={handleRefreshPerPromptModels}
+              disabled={isFetchingModels}
+              ariaLabel={t("settings.postProcessing.api.model.refreshModels")}
+              className="flex h-10 w-10 items-center justify-center"
+            >
+              <RefreshCcw
+                className={`h-4 w-4 ${isFetchingModels ? "animate-spin" : ""}`}
+              />
+            </ResetButton>
+          </div>
+        </div>
+      )}
+    </>
+  );
 
   return (
     <SettingContainer
@@ -288,40 +551,7 @@ const PostProcessingSettingsPromptsComponent: React.FC = () => {
 
         {!isCreating && hasPrompts && selectedPrompt && (
           <div className="space-y-3">
-            <div className="space-y-2 flex flex-col">
-              <label className="text-sm font-semibold">
-                {t("settings.postProcessing.prompts.promptLabel")}
-              </label>
-              <Input
-                type="text"
-                value={draftName}
-                onChange={(e) => setDraftName(e.target.value)}
-                placeholder={t(
-                  "settings.postProcessing.prompts.promptLabelPlaceholder",
-                )}
-                variant="compact"
-              />
-            </div>
-
-            <div className="space-y-2 flex flex-col">
-              <label className="text-sm font-semibold">
-                {t("settings.postProcessing.prompts.promptInstructions")}
-              </label>
-              <Textarea
-                value={draftText}
-                onChange={(e) => setDraftText(e.target.value)}
-                placeholder={t(
-                  "settings.postProcessing.prompts.promptInstructionsPlaceholder",
-                )}
-              />
-              <p className="text-xs text-mid-gray/70">
-                <Trans
-                  i18nKey="settings.postProcessing.prompts.promptTip"
-                  components={{ code: <code /> }}
-                />
-              </p>
-            </div>
-
+            {promptEditorFields}
             <div className="flex gap-2 pt-2">
               <Button
                 onClick={handleUpdatePrompt}
@@ -355,40 +585,7 @@ const PostProcessingSettingsPromptsComponent: React.FC = () => {
 
         {isCreating && (
           <div className="space-y-3">
-            <div className="space-y-2 block flex flex-col">
-              <label className="text-sm font-semibold text-text">
-                {t("settings.postProcessing.prompts.promptLabel")}
-              </label>
-              <Input
-                type="text"
-                value={draftName}
-                onChange={(e) => setDraftName(e.target.value)}
-                placeholder={t(
-                  "settings.postProcessing.prompts.promptLabelPlaceholder",
-                )}
-                variant="compact"
-              />
-            </div>
-
-            <div className="space-y-2 flex flex-col">
-              <label className="text-sm font-semibold">
-                {t("settings.postProcessing.prompts.promptInstructions")}
-              </label>
-              <Textarea
-                value={draftText}
-                onChange={(e) => setDraftText(e.target.value)}
-                placeholder={t(
-                  "settings.postProcessing.prompts.promptInstructionsPlaceholder",
-                )}
-              />
-              <p className="text-xs text-mid-gray/70">
-                <Trans
-                  i18nKey="settings.postProcessing.prompts.promptTip"
-                  components={{ code: <code /> }}
-                />
-              </p>
-            </div>
-
+            {promptEditorFields}
             <div className="flex gap-2 pt-2">
               <Button
                 onClick={handleCreatePrompt}

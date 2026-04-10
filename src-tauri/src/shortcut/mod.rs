@@ -54,6 +54,9 @@ pub fn init_shortcuts(app: &AppHandle) {
             }
         }
     }
+
+    // Register per-prompt shortcuts
+    register_all_prompt_shortcuts(app);
 }
 
 /// Register the cancel shortcut (called when recording starts)
@@ -89,6 +92,60 @@ pub fn unregister_shortcut(app: &AppHandle, binding: ShortcutBinding) -> Result<
     match settings.keyboard_implementation {
         KeyboardImplementation::Tauri => tauri_impl::unregister_shortcut(app, binding),
         KeyboardImplementation::HandyKeys => handy_keys::unregister_shortcut(app, binding),
+    }
+}
+
+/// Build the binding ID used for a per-prompt shortcut
+fn prompt_binding_id(prompt_id: &str) -> String {
+    format!("post_process_prompt:{}", prompt_id)
+}
+
+/// Register a shortcut binding for a specific prompt
+fn register_prompt_shortcut(app: &AppHandle, prompt_id: &str, binding_str: &str) {
+    let binding_id = prompt_binding_id(prompt_id);
+    let binding = ShortcutBinding {
+        id: binding_id.clone(),
+        name: format!("Post-Process: {}", prompt_id),
+        description: "Transcribe with a specific post-processing prompt".to_string(),
+        default_binding: binding_str.to_string(),
+        current_binding: binding_str.to_string(),
+    };
+    if let Err(e) = register_shortcut(app, binding) {
+        warn!(
+            "Failed to register prompt shortcut for '{}': {}",
+            prompt_id, e
+        );
+    }
+}
+
+/// Unregister a shortcut binding for a specific prompt
+fn unregister_prompt_shortcut(app: &AppHandle, prompt_id: &str, binding_str: &str) {
+    let binding_id = prompt_binding_id(prompt_id);
+    let binding = ShortcutBinding {
+        id: binding_id.clone(),
+        name: String::new(),
+        description: String::new(),
+        default_binding: binding_str.to_string(),
+        current_binding: binding_str.to_string(),
+    };
+    if let Err(e) = unregister_shortcut(app, binding) {
+        warn!(
+            "Failed to unregister prompt shortcut for '{}': {}",
+            prompt_id, e
+        );
+    }
+}
+
+/// Register all prompt-specific shortcuts from settings
+pub fn register_all_prompt_shortcuts(app: &AppHandle) {
+    let settings = get_settings(app);
+    if !settings.post_process_enabled {
+        return;
+    }
+    for prompt in &settings.post_process_prompts {
+        if let Some(ref binding_str) = prompt.shortcut_binding {
+            register_prompt_shortcut(app, &prompt.id, binding_str);
+        }
     }
 }
 
@@ -812,6 +869,18 @@ pub fn change_post_process_enabled_setting(app: AppHandle, enabled: bool) -> Res
         }
     }
 
+    // Register or unregister prompt-specific shortcuts
+    if enabled {
+        register_all_prompt_shortcuts(&app);
+    } else {
+        // Unregister all prompt shortcuts
+        for prompt in &settings.post_process_prompts {
+            if let Some(ref binding_str) = prompt.shortcut_binding {
+                unregister_prompt_shortcut(&app, &prompt.id, binding_str);
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -912,8 +981,23 @@ pub fn add_post_process_prompt(
     app: AppHandle,
     name: String,
     prompt: String,
+    context_source: settings::ContextSource,
+    shortcut_binding: Option<String>,
+    provider_id: Option<String>,
+    model: Option<String>,
 ) -> Result<LLMPrompt, String> {
     let mut settings = settings::get_settings(&app);
+
+    // Validate shortcut binding if provided
+    if let Some(ref binding) = shortcut_binding {
+        validate_shortcut_for_implementation(binding, settings.keyboard_implementation)
+            .map_err(|e| format!("Invalid shortcut binding '{}': {}", binding, e))?;
+    }
+
+    // Validate provider_id if provided
+    if let Some(ref pid) = provider_id {
+        validate_provider_exists(&settings, pid)?;
+    }
 
     // Generate unique ID using timestamp and random component
     let id = format!("prompt_{}", chrono::Utc::now().timestamp_millis());
@@ -922,9 +1006,19 @@ pub fn add_post_process_prompt(
         id: id.clone(),
         name,
         prompt,
+        context_source,
+        shortcut_binding: shortcut_binding.clone(),
+        provider_id,
+        model,
     };
 
     settings.post_process_prompts.push(new_prompt.clone());
+
+    // Register shortcut if provided
+    if let Some(ref binding) = shortcut_binding {
+        register_prompt_shortcut(&app, &id, binding);
+    }
+
     settings::write_settings(&app, settings);
 
     Ok(new_prompt)
@@ -937,16 +1031,48 @@ pub fn update_post_process_prompt(
     id: String,
     name: String,
     prompt: String,
+    context_source: settings::ContextSource,
+    shortcut_binding: Option<String>,
+    provider_id: Option<String>,
+    model: Option<String>,
 ) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
+
+    // Validate shortcut binding if provided
+    if let Some(ref binding) = shortcut_binding {
+        validate_shortcut_for_implementation(binding, settings.keyboard_implementation)
+            .map_err(|e| format!("Invalid shortcut binding '{}': {}", binding, e))?;
+    }
+
+    // Validate provider_id if provided
+    if let Some(ref pid) = provider_id {
+        validate_provider_exists(&settings, pid)?;
+    }
 
     if let Some(existing_prompt) = settings
         .post_process_prompts
         .iter_mut()
         .find(|p| p.id == id)
     {
+        // Unregister old shortcut if it changed
+        if existing_prompt.shortcut_binding.as_ref() != shortcut_binding.as_ref() {
+            if let Some(ref old_binding) = existing_prompt.shortcut_binding {
+                unregister_prompt_shortcut(&app, &id, old_binding);
+            }
+        }
+
         existing_prompt.name = name;
         existing_prompt.prompt = prompt;
+        existing_prompt.context_source = context_source;
+        existing_prompt.shortcut_binding = shortcut_binding.clone();
+        existing_prompt.provider_id = provider_id;
+        existing_prompt.model = model;
+
+        // Register new shortcut if provided
+        if let Some(ref binding) = shortcut_binding {
+            register_prompt_shortcut(&app, &id, binding);
+        }
+
         settings::write_settings(&app, settings);
         Ok(())
     } else {
@@ -962,6 +1088,13 @@ pub fn delete_post_process_prompt(app: AppHandle, id: String) -> Result<(), Stri
     // Don't allow deleting the last prompt
     if settings.post_process_prompts.len() <= 1 {
         return Err("Cannot delete the last prompt".to_string());
+    }
+
+    // Unregister shortcut if the prompt had one
+    if let Some(prompt) = settings.post_process_prompts.iter().find(|p| p.id == id) {
+        if let Some(ref binding) = prompt.shortcut_binding {
+            unregister_prompt_shortcut(&app, &id, binding);
+        }
     }
 
     // Find and remove the prompt
