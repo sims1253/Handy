@@ -61,11 +61,19 @@ fn strip_invisible_chars(s: &str) -> String {
 
 /// Build a system prompt from the user's prompt template.
 /// Removes `${output}` placeholder since the transcription is sent as the user message.
-/// Replaces `${context}` with the provided context or an empty string.
+/// Replaces `${context}` with the provided context or removes it if not available.
 fn build_system_prompt(prompt_template: &str, context: Option<&str>) -> String {
-    let result = prompt_template
-        .replace("${output}", "")
-        .replace("${context}", context.unwrap_or(""));
+    let result = match context {
+        Some(ctx) if !ctx.trim().is_empty() => prompt_template
+            .replace("${output}", "")
+            .replace("${context}", ctx),
+        _ => {
+            // Remove ${context} placeholder and any surrounding context markers
+            prompt_template
+                .replace("${output}", "")
+                .replace("${context}", "")
+        }
+    };
     result.trim().to_string()
 }
 
@@ -74,36 +82,47 @@ fn build_system_prompt(prompt_template: &str, context: Option<&str>) -> String {
 async fn get_context(app: &AppHandle, source: ContextSource) -> Option<String> {
     match source {
         ContextSource::None => None,
-        ContextSource::Clipboard | ContextSource::Selection => {
-            if source == ContextSource::Selection {
-                // Simulate Cmd/Ctrl+C to copy the current selection to clipboard
-                simulate_copy();
-                // Brief delay to allow clipboard to update
-                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        ContextSource::Clipboard => read_clipboard_context(app, "clipboard").await,
+        ContextSource::Selection => {
+            simulate_copy();
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            read_clipboard_context(app, "selection").await
+        }
+        ContextSource::ClipboardAndSelection => {
+            // First read clipboard contents
+            let clipboard_text = read_clipboard_context(app, "clipboard").await;
+            // Then simulate copy to get selection
+            simulate_copy();
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            let selection_text = read_clipboard_context(app, "selection").await;
+
+            match (clipboard_text, selection_text) {
+                (Some(cb), Some(sel)) => Some(format!(
+                    "--- Clipboard ---\n{}\n--- Selection ---\n{}",
+                    cb, sel
+                )),
+                (Some(cb), None) => Some(cb),
+                (None, Some(sel)) => Some(sel),
+                (None, None) => None,
             }
-            let clipboard = app.clipboard();
-            match clipboard.read_text() {
-                Ok(text) if !text.trim().is_empty() => {
-                    debug!(
-                        "Context retrieved from {}: {} chars",
-                        match source {
-                            ContextSource::Clipboard => "clipboard",
-                            ContextSource::Selection => "selection",
-                            ContextSource::None => "none",
-                        },
-                        text.len()
-                    );
-                    Some(text)
-                }
-                Ok(_) => {
-                    debug!("Context source {:?} returned empty content", source);
-                    None
-                }
-                Err(e) => {
-                    warn!("Failed to read clipboard for context: {}", e);
-                    None
-                }
-            }
+        }
+    }
+}
+
+async fn read_clipboard_context(app: &AppHandle, label: &str) -> Option<String> {
+    let clipboard = app.clipboard();
+    match clipboard.read_text() {
+        Ok(text) if !text.trim().is_empty() => {
+            debug!("Context retrieved from {}: {} chars", label, text.len());
+            Some(text)
+        }
+        Ok(_) => {
+            debug!("Context source '{}' returned empty content", label);
+            None
+        }
+        Err(e) => {
+            warn!("Failed to read clipboard for context '{}': {}", label, e);
+            None
         }
     }
 }

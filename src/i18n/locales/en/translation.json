@@ -416,12 +416,15 @@
           "description": "Choose additional text to include with the prompt. This text is available as ${context} in your prompt template.",
           "none": "None (transcription only)",
           "clipboard": "Clipboard contents",
-          "selection": "Selected text (copies selection first)"
+          "selection": "Selected text (copies selection first)",
+          "clipboardAndSelection": "Clipboard + Selected text"
         },
         "shortcut": {
           "title": "Prompt Shortcut",
           "description": "Assign a keyboard shortcut to trigger transcription with this specific prompt.",
-          "placeholder": "e.g. ctrl+alt+1",
+          "placeholder": "Click to record shortcut...",
+          "pressKeys": "Press keys...",
+          "cancelRecording": "Cancel",
           "clear": "Clear"
         },
         "providerOverride": {

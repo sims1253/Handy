@@ -13,6 +13,7 @@ import {
 import { Button } from "../../ui/Button";
 import { ResetButton } from "../../ui/ResetButton";
 import { Input } from "../../ui/Input";
+import { PromptShortcutInput } from "../PostProcessingSettingsApi/PromptShortcutInput";
 
 import { ProviderSelect } from "../PostProcessingSettingsApi/ProviderSelect";
 import { BaseUrlField } from "../PostProcessingSettingsApi/BaseUrlField";
@@ -147,6 +148,7 @@ const CONTEXT_SOURCE_OPTIONS = [
   { value: "none", label: "settings.postProcessing.prompts.contextSource.none" },
   { value: "clipboard", label: "settings.postProcessing.prompts.contextSource.clipboard" },
   { value: "selection", label: "settings.postProcessing.prompts.contextSource.selection" },
+  { value: "clipboard_and_selection", label: "settings.postProcessing.prompts.contextSource.clipboardAndSelection" },
 ] as const;
 
 import type { ContextSource } from "@/bindings";
@@ -417,28 +419,10 @@ const PostProcessingSettingsPromptsComponent: React.FC = () => {
         <p className="text-xs text-mid-gray/70">
           {t("settings.postProcessing.prompts.shortcut.description")}
         </p>
-        <div className="flex items-center gap-2 max-w-[280px]">
-          <Input
-            type="text"
-            value={draftShortcut ?? ""}
-            onChange={(e) =>
-              setDraftShortcut(e.target.value.trim() || null)
-            }
-            placeholder={t(
-              "settings.postProcessing.prompts.shortcut.placeholder",
-            )}
-            variant="compact"
-          />
-          {draftShortcut && (
-            <Button
-              onClick={() => setDraftShortcut(null)}
-              variant="secondary"
-              size="sm"
-            >
-              {t("settings.postProcessing.prompts.shortcut.clear")}
-            </Button>
-          )}
-        </div>
+        <PromptShortcutInput
+          value={draftShortcut}
+          onChange={setDraftShortcut}
+        />
       </div>
 
       <div className="space-y-2 flex flex-col">

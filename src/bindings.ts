@@ -846,7 +846,7 @@ export type ImplementationChangeResult = { success: boolean;
  * List of binding IDs that were reset to defaults due to incompatibility
  */
 reset_bindings: string[] }
-export type ContextSource = "none" | "clipboard" | "selection"
+export type ContextSource = "none" | "clipboard" | "selection" | "clipboard_and_selection"
 export type KeyboardImplementation = "tauri" | "handy_keys"
 export type LLMPrompt = { id: string; name: string; prompt: string; context_source: ContextSource; shortcut_binding: string | null; provider_id: string | null; model: string | null }
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error"

@@ -87,12 +87,13 @@ pub struct ShortcutBinding {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type, Default)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum ContextSource {
     #[default]
     None,
     Clipboard,
     Selection,
+    ClipboardAndSelection,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Type)]
