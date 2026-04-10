@@ -901,7 +901,7 @@ pub fn change_post_process_base_url_setting(
     base_url: String,
 ) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
-    let label = settings
+    let _label = settings
         .post_process_provider(&provider_id)
         .map(|provider| provider.label.clone())
         .ok_or_else(|| format!("Provider '{}' not found", provider_id))?;
@@ -909,13 +909,6 @@ pub fn change_post_process_base_url_setting(
     let provider = settings
         .post_process_provider_mut(&provider_id)
         .expect("Provider looked up above must exist");
-
-    if provider.id != "custom" {
-        return Err(format!(
-            "Provider '{}' does not allow editing the base URL",
-            label
-        ));
-    }
 
     provider.base_url = base_url;
     settings::write_settings(&app, settings);
@@ -971,6 +964,78 @@ pub fn set_post_process_provider(app: AppHandle, provider_id: String) -> Result<
     let mut settings = settings::get_settings(&app);
     validate_provider_exists(&settings, &provider_id)?;
     settings.post_process_provider_id = provider_id;
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn add_post_process_provider(
+    app: AppHandle,
+    label: String,
+    base_url: String,
+) -> Result<settings::PostProcessProvider, String> {
+    let mut settings = settings::get_settings(&app);
+
+    let id = format!("custom_{}", chrono::Utc::now().timestamp_millis());
+
+    let provider = settings::PostProcessProvider {
+        id: id.clone(),
+        label,
+        base_url,
+        allow_base_url_edit: true,
+        models_endpoint: Some("/models".to_string()),
+        supports_structured_output: false,
+        is_builtin: false,
+    };
+
+    settings.post_process_providers.push(provider.clone());
+    settings
+        .post_process_api_keys
+        .insert(id.clone(), String::new());
+    settings.post_process_models.insert(id, String::new());
+    settings::write_settings(&app, settings);
+
+    Ok(provider)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn remove_post_process_provider(app: AppHandle, provider_id: String) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+
+    let provider = settings
+        .post_process_provider(&provider_id)
+        .ok_or_else(|| format!("Provider '{}' not found", provider_id))?;
+
+    if provider.is_builtin {
+        return Err("Cannot delete built-in providers".to_string());
+    }
+
+    // Remove provider and its associated data
+    settings
+        .post_process_providers
+        .retain(|p| p.id != provider_id);
+    settings.post_process_api_keys.remove(&provider_id);
+    settings.post_process_models.remove(&provider_id);
+
+    // If the removed provider was selected, fall back to the first available
+    if settings.post_process_provider_id == provider_id {
+        settings.post_process_provider_id = settings
+            .post_process_providers
+            .first()
+            .map(|p| p.id.clone())
+            .unwrap_or_default();
+    }
+
+    // Clear any per-prompt overrides referencing this provider
+    for prompt in &mut settings.post_process_prompts {
+        if prompt.provider_id.as_deref() == Some(&provider_id) {
+            prompt.provider_id = None;
+            prompt.model = None;
+        }
+    }
+
     settings::write_settings(&app, settings);
     Ok(())
 }

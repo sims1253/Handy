@@ -367,7 +367,14 @@
         "title": "API (OpenAI Compatible)",
         "provider": {
           "title": "Provider",
-          "description": "Select an OpenAI-compatible provider."
+          "description": "Select an OpenAI-compatible provider.",
+          "add": "Add custom provider",
+          "addTitle": "New Custom Provider",
+          "addDescription": "Create a new custom provider with a name and base URL.",
+          "namePlaceholder": "Provider name (e.g., My Local LLM)",
+          "urlPlaceholder": "Base URL (e.g., http://localhost:11434/v1)",
+          "create": "Create",
+          "delete": "Delete provider"
         },
         "appleIntelligence": {
           "title": "Apple Intelligence",
@@ -377,7 +384,8 @@
         },
         "baseUrl": {
           "title": "Base URL",
-          "description": "API base URL for the selected provider. Only the custom provider can be edited.",
+          "description": "API base URL. Override to use a different endpoint (e.g., a proxy or alternative plan).",
+          "descriptionAll": "API base URL. Edit to point to an alternative endpoint (e.g., a proxy or different plan).",
           "placeholder": "https://api.openai.com/v1"
         },
         "apiKey": {

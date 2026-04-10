@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
-import { RefreshCcw } from "lucide-react";
+import { Plus, Trash2, RefreshCcw } from "lucide-react";
 import { commands } from "@/bindings";
 
 import { Alert } from "../../ui/Alert";
@@ -26,6 +26,37 @@ import { useSettings } from "../../../hooks/useSettings";
 const PostProcessingSettingsApiComponent: React.FC = () => {
   const { t } = useTranslation();
   const state = usePostProcessProviderState();
+  const { refreshSettings } = useSettings();
+  const [isAddingProvider, setIsAddingProvider] = useState(false);
+  const [newProviderName, setNewProviderName] = useState("");
+  const [newProviderUrl, setNewProviderUrl] = useState("");
+
+  const handleAddProvider = async () => {
+    if (!newProviderName.trim() || !newProviderUrl.trim()) return;
+    const result = await commands.addPostProcessProvider(
+      newProviderName.trim(),
+      newProviderUrl.trim(),
+    );
+    if (result.status === "ok") {
+      setNewProviderName("");
+      setNewProviderUrl("");
+      setIsAddingProvider(false);
+      await refreshSettings();
+    }
+  };
+
+  const handleDeleteProvider = async () => {
+    if (!state.selectedProviderId) return;
+    const result = await commands.removePostProcessProvider(
+      state.selectedProviderId,
+    );
+    if (result.status === "ok") {
+      await refreshSettings();
+    }
+  };
+
+  const canDeleteProvider =
+    !!state.selectedProvider && !state.selectedProvider.is_builtin;
 
   return (
     <>
@@ -42,8 +73,81 @@ const PostProcessingSettingsApiComponent: React.FC = () => {
             value={state.selectedProviderId}
             onChange={state.handleProviderSelect}
           />
+          <Button
+            onClick={() => setIsAddingProvider(true)}
+            variant="secondary"
+            size="sm"
+            disabled={isAddingProvider}
+            aria-label={t("settings.postProcessing.api.provider.add")}
+          >
+            <Plus className="h-4 w-4" />
+          </Button>
+          {canDeleteProvider && (
+            <Button
+              onClick={handleDeleteProvider}
+              variant="secondary"
+              size="sm"
+              aria-label={t("settings.postProcessing.api.provider.delete")}
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          )}
         </div>
       </SettingContainer>
+
+      {isAddingProvider && (
+        <SettingContainer
+          title={t("settings.postProcessing.api.provider.addTitle")}
+          description={t("settings.postProcessing.api.provider.addDescription")}
+          descriptionMode="tooltip"
+          layout="stacked"
+          grouped={true}
+        >
+          <div className="space-y-2">
+            <Input
+              type="text"
+              value={newProviderName}
+              onChange={(e) => setNewProviderName(e.target.value)}
+              placeholder={t(
+                "settings.postProcessing.api.provider.namePlaceholder",
+              )}
+              variant="compact"
+              className="min-w-[320px]"
+            />
+            <Input
+              type="text"
+              value={newProviderUrl}
+              onChange={(e) => setNewProviderUrl(e.target.value)}
+              placeholder={t(
+                "settings.postProcessing.api.provider.urlPlaceholder",
+              )}
+              variant="compact"
+              className="min-w-[380px]"
+            />
+            <div className="flex gap-2">
+              <Button
+                onClick={handleAddProvider}
+                variant="primary"
+                size="sm"
+                disabled={!newProviderName.trim() || !newProviderUrl.trim()}
+              >
+                {t("settings.postProcessing.api.provider.create")}
+              </Button>
+              <Button
+                onClick={() => {
+                  setIsAddingProvider(false);
+                  setNewProviderName("");
+                  setNewProviderUrl("");
+                }}
+                variant="secondary"
+                size="sm"
+              >
+                {t("settings.postProcessing.prompts.cancel")}
+              </Button>
+            </div>
+          </div>
+        </SettingContainer>
+      )}
 
       {state.isAppleProvider ? (
         state.appleIntelligenceUnavailable ? (
@@ -53,27 +157,25 @@ const PostProcessingSettingsApiComponent: React.FC = () => {
         ) : null
       ) : (
         <>
-          {state.selectedProvider?.id === "custom" && (
-            <SettingContainer
-              title={t("settings.postProcessing.api.baseUrl.title")}
-              description={t("settings.postProcessing.api.baseUrl.description")}
-              descriptionMode="tooltip"
-              layout="horizontal"
-              grouped={true}
-            >
-              <div className="flex items-center gap-2">
-                <BaseUrlField
-                  value={state.baseUrl}
-                  onBlur={state.handleBaseUrlChange}
-                  placeholder={t(
-                    "settings.postProcessing.api.baseUrl.placeholder",
-                  )}
-                  disabled={state.isBaseUrlUpdating}
-                  className="min-w-[380px]"
-                />
-              </div>
-            </SettingContainer>
-          )}
+          <SettingContainer
+            title={t("settings.postProcessing.api.baseUrl.title")}
+            description={t("settings.postProcessing.api.baseUrl.descriptionAll")}
+            descriptionMode="tooltip"
+            layout="horizontal"
+            grouped={true}
+          >
+            <div className="flex items-center gap-2">
+              <BaseUrlField
+                value={state.baseUrl}
+                onBlur={state.handleBaseUrlChange}
+                placeholder={t(
+                  "settings.postProcessing.api.baseUrl.placeholder",
+                )}
+                disabled={state.isBaseUrlUpdating}
+                className="min-w-[380px]"
+              />
+            </div>
+          </SettingContainer>
 
           <SettingContainer
             title={t("settings.postProcessing.api.apiKey.title")}
@@ -101,7 +203,7 @@ const PostProcessingSettingsApiComponent: React.FC = () => {
         <SettingContainer
           title={t("settings.postProcessing.api.model.title")}
           description={
-            state.isCustomProvider
+            !state.selectedProvider?.is_builtin
               ? t("settings.postProcessing.api.model.descriptionCustom")
               : t("settings.postProcessing.api.model.descriptionDefault")
           }
